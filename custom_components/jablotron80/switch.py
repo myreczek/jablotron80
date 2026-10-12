@@ -45,6 +45,10 @@ class JablotronBypassSwitch(JablotronEntity, SwitchEntity, RestoreEntity):
 
     def __init__(self, device: JablotronDevice, cu: JA80CentralUnit):
         super().__init__(cu, device)
+        # Changing a bypass walks the keypad menu and takes 10-30 s. Meanwhile the
+        # switch shows the requested state; the latest request wins.
+        self._requested: Optional[int] = None
+        self._busy = False
 
     @property
     def available(self) -> bool:
@@ -65,9 +69,10 @@ class JablotronBypassSwitch(JablotronEntity, SwitchEntity, RestoreEntity):
 
     @property
     def is_on(self) -> Optional[bool]:
-        if self._object.bypass is None:
+        bypass = self._requested if self._requested is not None else self._object.bypass
+        if bypass is None:
             return None
-        return self._object.bypass != JablotronBypass.NONE
+        return bypass != JablotronBypass.NONE
 
     @property
     def entity_category(self) -> Optional[EntityCategory]:
@@ -95,10 +100,24 @@ class JablotronBypassSwitch(JablotronEntity, SwitchEntity, RestoreEntity):
         return attr
 
     async def _set(self, wanted: int) -> None:
+        self._requested = wanted
+        self.async_write_ha_state()
+        if self._busy:
+            # the running change picks up the new request when it is done
+            return
+        self._busy = True
         try:
-            await self._cu.set_bypass(self._object.device_id, wanted)
+            while True:
+                target = self._requested
+                await self._cu.set_bypass(self._object.device_id, target)
+                if self._requested == target:
+                    break
         except JablotronMenuError as ex:
             raise HomeAssistantError(f"Bypass of {self.name} failed: {ex}") from ex
+        finally:
+            self._busy = False
+            self._requested = None
+            self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._set(JablotronBypass.PERMANENT)
