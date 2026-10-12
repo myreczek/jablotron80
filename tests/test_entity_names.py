@@ -56,3 +56,13 @@ def test_battery_and_bypass_entities_are_sub_entities():
         body = source.split(f"class {cls}(", 1)[1].split("\nclass ", 1)[0]
         assert "_names_object = False" in body, cls
 
+
+def test_device_links_to_cable_by_id_when_known():
+    from custom_components.jablotron80.const import DOMAIN
+    from custom_components.jablotron80.jablotronHA import via_cable
+
+    unit = _build_unit()
+    assert via_cable(unit) == {"via_device": (DOMAIN, unit.serial_port)}
+
+    unit.cable_device_id = "abc123"
+    assert via_cable(unit) == {"via_device_id": "abc123"}

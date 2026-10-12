@@ -23,7 +23,7 @@ from .const import (
 from typing import Any, Dict, List, Optional
 from .const import DATA_JABLOTRON, DOMAIN, NAME, MANUFACTURER
 from .jablotron import JA80CentralUnit, JablotronDevice, JablotronZone
-from .jablotronHA import JablotronEntity
+from .jablotronHA import JablotronEntity, via_cable
 
 
 import logging
@@ -313,7 +313,7 @@ class Jablotron80AlarmControl(JablotronEntity, AlarmControlPanelEntity):
         info = {
             "identifiers": {(DOMAIN, f"jablotron_panel_{self._main_zone}")},
             "name": "jablotron panel",
-            "via_device": (DOMAIN, self._cu.serial_port),
+            **via_cable(self._cu),
         }
         info["model"] = "Home Assistant control panel"
         info["manufacturer"] = "Jablotron"

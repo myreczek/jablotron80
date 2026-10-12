@@ -15,6 +15,13 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 
+def via_cable(cu: JA80CentralUnit) -> Dict[str, Any]:
+    """device_info entry linking a device to the cable it is reached through."""
+    if cu.cable_device_id is not None:
+        return {"via_device_id": cu.cable_device_id}
+    return {"via_device": (DOMAIN, cu.serial_port)}
+
+
 class JablotronEntity(Entity):
 
     # Whether a name given to this entity in the UI renames the underlying
@@ -56,7 +63,7 @@ class JablotronEntity(Entity):
         info = {
             "identifiers": {(DOMAIN, self._object.device_id)},
             "name": name,
-            "via_device": (DOMAIN, self._cu.serial_port),
+            **via_cable(self._cu),
         }
         if hasattr(self._object, "model") and not self._object.model is None:
             info["model"] = self._object.model

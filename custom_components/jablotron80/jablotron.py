@@ -1683,6 +1683,8 @@ class JA80CentralUnit(object):
         self._last_event_data = None
 
         self._master_code = config[CONFIGURATION_PASSWORD]
+        # device registry id of the cable device, set by the integration setup
+        self.cable_device_id = None
         # this is in scale 0 - 40, 0 - 100% ?
         self._rf_level = JablotronSensor(1)
         self._rf_level.name = f"{CENTRAL_UNIT_MODEL} RF level"

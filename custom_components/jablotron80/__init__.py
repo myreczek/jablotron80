@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from homeassistant.components.alarm_control_panel import (
     DOMAIN as PLATFORM_ALARM_CONTROL_PANEL,
 )
@@ -59,13 +60,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     cu.load_bypass_snapshot(entry.data.get(CONFIGURATION_BYPASSES))
 
     device_registry = dr.async_get(hass)
-    device_registry.async_get_or_create(
+    cable = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, cu.serial_port)},
         name="Cable",
         model=CABLE_MODELS[entry.data[CABLE_MODEL]],
         manufacturer=MANUFACTURER,
     )
+    # Newer HA links child devices by device id (via_device is deprecated);
+    # older versions only know via_device.
+    if "via_device_id" in inspect.signature(dr.DeviceRegistry.async_get_or_create).parameters:
+        cu.cable_device_id = cable.id
 
     hass.data[DOMAIN][entry.entry_id] = {
         DATA_JABLOTRON: cu,
