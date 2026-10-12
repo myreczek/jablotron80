@@ -1232,6 +1232,9 @@ class JablotronMessage:
     def validate_length(main_type: str, record: bytes) -> bool:
         return len(record) == JablotronMessage.get_length(main_type, record)
 
+    # record types (first byte) for which crc7 needed the legacy fallback
+    _crc7_mismatch_types = set()
+
     @staticmethod
     def check_crc(packet: bytes) -> bool:
 
@@ -1245,7 +1248,12 @@ class JablotronMessage:
         expected_checksum = packet[length - 2]
         data = packet[: length - 2]
 
-        # first attempt to check CRC with one algo
+        if JablotronMessage.crc7(data) == expected_checksum:
+            return True
+
+        # Fallback: the two CRC8 variants used before the panel's real checksum was
+        # known. Each matches only part of the records; keep them until crc7 has been
+        # confirmed for every record type, and log whenever they are still needed.
         crcchecker = crccheck.crc.Crc(
             8, 70, initvalue=49, xor_output=0, reflect_input=False, reflect_output=False
         )
@@ -1267,7 +1275,30 @@ class JablotronMessage:
             if not checksum & 0x7F == expected_checksum:
                 return False
 
+        # once per record type, so a systematic mismatch is visible without flooding the log
+        if packet[0] not in JablotronMessage._crc7_mismatch_types:
+            JablotronMessage._crc7_mismatch_types.add(packet[0])
+            LOGGER.warning(
+                f"crc7 mismatch accepted by legacy CRC8 check (please report): {format_packet(packet)}"
+            )
         return True
+
+    @staticmethod
+    def crc7(data: bytes) -> int:
+        """The panel's record checksum, as computed by OLink (FUN_0057bdd4).
+
+        A 7-bit CRC, polynomial x^7+x^5+x+1 (0x23), initial value 0x7F, with the
+        data bits shifted in and one zero byte appended to flush the register.
+        Kept below 0x80 so it can never be mistaken for the 0xFF terminator.
+        """
+        crc = 0x7F
+        for byte in bytes(data) + b"\x00":
+            for _ in range(8):
+                crc = ((crc << 1) & 0xFF) | (byte >> 7)
+                if crc & 0x80:
+                    crc ^= 0xA3
+                byte = (byte << 1) & 0xFF
+        return crc
 
     @staticmethod
     def get_message_type_from_record(record, packet_data: bytes) -> str:
