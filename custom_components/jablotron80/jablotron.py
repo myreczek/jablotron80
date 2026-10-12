@@ -675,6 +675,9 @@ class JablotronCommand:
     # code entries in a row (JA-80K manual, 13.2). A rejected code must therefore
     # never be hammered. Only the code-less "Details" query raises this budget.
     max_retries: int = 2
+    # The caller verifies the effect itself (e.g. bypass menu keys against the
+    # state records), so a missing ack is expected and only logged at INFO.
+    ack_optional: bool = False
 
     def __post_init__(self) -> None:
         self._event = asyncio.Event()
@@ -855,7 +858,11 @@ class JablotronConnection:
                                 LOGGER.debug(f"keypress accepted, sequence:{i}")
                                 accepted = True
                             else:
-                                level = self._no_ack_log_level(send_cmd.name, retries)
+                                level = (
+                                    logging.INFO
+                                    if send_cmd.ack_optional
+                                    else self._no_ack_log_level(send_cmd.name, retries)
+                                )
                                 LOGGER.log(level, f"no accepted message for sequence:{i} received")
                                 accepted = False
                                 break
@@ -896,7 +903,10 @@ class JablotronConnection:
                         # Budget exhausted without the command ever succeeding. Report the
                         # failure, otherwise anyone awaiting wait_for_confirmation() waits
                         # forever - read_settings() does exactly that, during startup.
-                        LOGGER.warning(f"command {send_cmd} not confirmed after all retries")
+                        LOGGER.log(
+                            logging.INFO if send_cmd.ack_optional else logging.WARN,
+                            f"command {send_cmd} not confirmed after all retries",
+                        )
                         send_cmd.confirm(False)
 
                     self._cmd_q.task_done()
@@ -3241,6 +3251,7 @@ class JA80CentralUnit(object):
             code=JablotronKeyPress.get_key_command(key),
             accepted_prefix=self.KEYPRESS_ACKS,
             max_retries=0,
+            ack_optional=True,
         )
         await self._connection.add_command(command)
         await command.wait_for_confirmation()
@@ -3354,8 +3365,9 @@ class JA80CentralUnit(object):
             self._bypass_known = True
             return result
 
-    # Entering "4 hh mm DD MM RR" takes a few seconds; the panel only keeps minutes.
-    CLOCK_ENTRY_SECONDS = 5
+    # Entering "4 hh mm DD MM RR" takes about a second (measured on a JA-82K);
+    # the panel only keeps minutes, so the result is within +-30 s.
+    CLOCK_ENTRY_SECONDS = 1
 
     @staticmethod
     def panel_time_keys(now: datetime.datetime) -> str:

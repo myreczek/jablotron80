@@ -14,9 +14,11 @@ from tests.test_bypass import FakePanel, _build_unit, _run
     [
         # manual example: 21:30, 29 April 2009
         (datetime.datetime(2009, 4, 29, 21, 29, 40), "42130290409"),
-        # rounded to the minute the last digit arrives in (5 s entry + nearest)
-        (datetime.datetime(2026, 10, 12, 17, 5, 20), "41705121026"),
-        (datetime.datetime(2026, 10, 12, 17, 5, 30), "41706121026"),
+        # rounded to the nearest minute at the time the last digit arrives (~1 s)
+        (datetime.datetime(2026, 10, 12, 17, 5, 28), "41705121026"),
+        (datetime.datetime(2026, 10, 12, 17, 5, 29), "41706121026"),
+        # measured case: pressed 18:02:24.7 -> must be 18:02, not 18:03
+        (datetime.datetime(2026, 10, 12, 18, 2, 24), "41802121026"),
         # crosses midnight and the year
         (datetime.datetime(2026, 12, 31, 23, 59, 50), "40000010127"),
     ],
