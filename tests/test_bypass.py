@@ -20,6 +20,7 @@ from custom_components.jablotron80.jablotron import (
     JablotronBypass,
     JablotronBypassError,
     JablotronKeyPress,
+    JablotronMenuError,
     JablotronState,
 )
 
@@ -130,11 +131,14 @@ class FakePanel:
     async def _handle(self, command) -> None:
         await asyncio.sleep(0)
         code = bytes(command.code)
-        if len(code) > 1:
+        if code[:2] == bytes([0x8F, 0x80]):
             # "*0" + master code
             self.keys.append("*0+code")
             if self.mode == "unset":
                 self.mode = "maintenance"
+        elif len(code) > 1:
+            # any other key sequence, e.g. the clock entry
+            self.keys.append("".join(self.KEY[b] for b in code))
         else:
             key = self.KEY[code[0]]
             self._count += 1
@@ -212,10 +216,10 @@ def test_refuses_when_armed(event_loop_for_setters):
     unit.BYPASS_STEP_TIMEOUT = 0.2
     event_loop_for_setters.run_until_complete(unit._process_state(armed, armed.hex()))
 
-    with pytest.raises(JablotronBypassError, match="fully unset"):
+    with pytest.raises(JablotronMenuError, match="fully unset"):
         event_loop_for_setters.run_until_complete(unit.set_bypass(12, PERM))
 
-    assert "*0+code" not in panel.keys
+    assert panel.keys == []
 
 
 def test_read_bypasses_walks_whole_menu(event_loop_for_setters):

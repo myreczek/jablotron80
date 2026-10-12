@@ -2,7 +2,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.components.button import ButtonEntity
 from homeassistant.exceptions import HomeAssistantError
-from .jablotron import JA80CentralUnit, JablotronButton, JablotronBypassError
+from homeassistant.util import dt as dt_util
+from .jablotron import JA80CentralUnit, JablotronButton, JablotronMenuError
 from .jablotronHA import JablotronEntity
 from typing import Optional
 from .const import DATA_JABLOTRON, DOMAIN
@@ -17,6 +18,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, asyn
     cu = hass.data[DOMAIN][config_entry.entry_id][DATA_JABLOTRON]  # type: JA80CentralUnit
     async_add_entities([JablotronQueryButtonEntity(cu.query, cu)], True)
     async_add_entities([JablotronBypassQueryButtonEntity(cu.bypass_query, cu)], True)
+    async_add_entities([JablotronClockSyncButtonEntity(cu.clock_sync, cu)], True)
 
 
 class JablotronQueryButtonEntity(JablotronEntity, ButtonEntity):
@@ -38,5 +40,19 @@ class JablotronBypassQueryButtonEntity(JablotronEntity, ButtonEntity):
         """Walk the bypass menu once to refresh every detector's bypass switch."""
         try:
             await self._cu.read_bypasses()
-        except JablotronBypassError as ex:
+        except JablotronMenuError as ex:
             raise HomeAssistantError(f"Reading bypasses failed: {ex}") from ex
+
+
+class JablotronClockSyncButtonEntity(JablotronEntity, ButtonEntity):
+
+    def __init__(self, button: JablotronButton, cu: JA80CentralUnit) -> None:
+        super().__init__(cu, button)
+
+    async def async_press(self) -> None:
+        """Set the panel clock to Home Assistant's local time (system must be unset)."""
+        try:
+            # the panel clock is local wall time in Home Assistant's time zone
+            await self._cu.set_panel_time(lambda: dt_util.now().replace(tzinfo=None))
+        except JablotronMenuError as ex:
+            raise HomeAssistantError(f"Setting the panel time failed: {ex}") from ex

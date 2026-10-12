@@ -15,7 +15,7 @@ from .jablotron import (
     JablotronConstants,
     JablotronDevice,
     JablotronCode,
-    JablotronBypassError,
+    JablotronMenuError,
 )
 from .const import (
     DATA_JABLOTRON,
@@ -107,7 +107,7 @@ class Jablotron80ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 try:
                     bypasses = await cu.read_bypasses()
                     self._config[CONFIGURATION_BYPASSES] = {str(k): v for k, v in bypasses.items()}
-                except JablotronBypassError as ex:
+                except JablotronMenuError as ex:
                     # not fatal: the integration reads them on its first start instead
                     LOGGER.warning(f"Could not read detector bypasses: {ex}")
             self._config[CONFIGURATION_CENTRAL_SETTINGS] = {
@@ -332,7 +332,7 @@ class JablotronOptionsFlow(config_entries.OptionsFlow):
         cu = self.hass.data[DOMAIN][entry.entry_id][DATA_JABLOTRON]
         try:
             bypasses = await cu.read_bypasses()
-        except JablotronBypassError as ex:
+        except JablotronMenuError as ex:
             LOGGER.warning(f"Could not read detector bypasses: {ex}")
             return {"base": "bypasses_unavailable"}
         listed_before = set(entry.data.get(CONFIGURATION_BYPASSES) or {})

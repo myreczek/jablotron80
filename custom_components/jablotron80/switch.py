@@ -4,7 +4,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.restore_state import RestoreEntity
-from .jablotron import JA80CentralUnit, JablotronDevice, JablotronBypass, JablotronBypassError
+from .jablotron import JA80CentralUnit, JablotronDevice, JablotronBypass, JablotronMenuError
 from .jablotronHA import JablotronEntity
 from typing import Any, Dict, Optional
 from .const import DATA_JABLOTRON, DOMAIN
@@ -97,7 +97,7 @@ class JablotronBypassSwitch(JablotronEntity, SwitchEntity, RestoreEntity):
     async def _set(self, wanted: int) -> None:
         try:
             await self._cu.set_bypass(self._object.device_id, wanted)
-        except JablotronBypassError as ex:
+        except JablotronMenuError as ex:
             raise HomeAssistantError(f"Bypass of {self.name} failed: {ex}") from ex
 
     async def async_turn_on(self, **kwargs: Any) -> None:

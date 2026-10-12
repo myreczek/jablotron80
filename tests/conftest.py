@@ -183,6 +183,17 @@ def _install_homeassistant_stubs() -> None:
     sys.modules["homeassistant.helpers.restore_state"] = ha_helpers_restore
     sys.modules["homeassistant.helpers.dispatcher"] = ha_helpers_dispatcher
 
+    # homeassistant.util.dt (button.py: Home Assistant's local time)
+    import datetime as _datetime
+
+    ha_util = types.ModuleType("homeassistant.util")
+    ha_util.__path__ = []
+    ha_util_dt = types.ModuleType("homeassistant.util.dt")
+    ha_util_dt.now = lambda: _datetime.datetime.now().astimezone()
+    ha_util.dt = ha_util_dt
+    sys.modules["homeassistant.util"] = ha_util
+    sys.modules["homeassistant.util.dt"] = ha_util_dt
+
 
 _install_homeassistant_stubs()
 

@@ -1496,7 +1496,11 @@ class JablotronState:
         return status in JablotronState.STATES_ALARM
 
 
-class JablotronBypassError(Exception):
+class JablotronMenuError(Exception):
+    """A keypad-menu operation in maintenance mode failed."""
+
+
+class JablotronBypassError(JablotronMenuError):
     pass
 
 
@@ -1709,6 +1713,10 @@ class JA80CentralUnit(object):
         self._bypass_query.name = f"{CENTRAL_UNIT_MODEL} Read bypasses"
         self._bypass_query.type = "button"
 
+        self._clock_sync = JablotronButton(8)
+        self._clock_sync.name = f"{CENTRAL_UNIT_MODEL} Sync panel time"
+        self._clock_sync.type = "button"
+
         # #151 read-only: the panel's own clock (day/month/hour/minute) as reported
         # in event records, plus its drift vs HA time at that event. Both update ONLY
         # when an event arrives (arm/disarm/alarm/...), not continuously. None until
@@ -1826,6 +1834,7 @@ class JA80CentralUnit(object):
             self._alert,
             self._query,
             self._bypass_query,
+            self._clock_sync,
             self._rf_level,
         ]
         objects = {id(obj): obj for obj in candidates if obj is not None}
@@ -1988,6 +1997,10 @@ class JA80CentralUnit(object):
     @property
     def bypass_query(self) -> JablotronButton:
         return self._bypass_query
+
+    @property
+    def clock_sync(self) -> JablotronButton:
+        return self._clock_sync
 
     @property
     def panel_time(self) -> JablotronSensor:
@@ -3217,30 +3230,36 @@ class JA80CentralUnit(object):
             except asyncio.TimeoutError:
                 return predicate()
 
+    # any keypress ack (A0 FF .. A7 FF) - which one depends on the beep the key gives
+    KEYPRESS_ACKS = tuple(bytes([0xA0 + i, 0xFF]) for i in range(8))
+
     async def _send_menu_key(self, key: str) -> None:
         # Menu keys are verified against the state records, never re-sent on a
         # missing ack: a repeated "next" or "toggle" would act twice.
         command = JablotronCommand(
             name=f"bypass menu key {key}",
             code=JablotronKeyPress.get_key_command(key),
-            accepted_prefix=tuple(bytes([0xA0 + i, 0xFF]) for i in range(8)),
+            accepted_prefix=self.KEYPRESS_ACKS,
             max_retries=0,
         )
         await self._connection.add_command(command)
         await command.wait_for_confirmation()
 
+    async def _enter_maintenance(self) -> None:
+        if JablotronState.is_disarmed_state(self._last_state):
+            await self.send_keypress_sequence("*0" + self._master_code, b"\xa1", b"\xb8\xff")
+            await self._wait_for_state(
+                lambda: self._last_state == JablotronState.MAINTENANCE,
+                self.BYPASS_ENTER_TIMEOUT,
+            )
+        if self._last_state != JablotronState.MAINTENANCE:
+            raise JablotronMenuError(
+                f"cannot enter maintenance mode (state {self._last_state}); the system must be fully unset"
+            )
+
     async def _open_bypass_menu(self) -> None:
         if self._last_state != JablotronState.BYPASS:
-            if JablotronState.is_disarmed_state(self._last_state):
-                await self.send_keypress_sequence("*0" + self._master_code, b"\xa1", b"\xb8\xff")
-                await self._wait_for_state(
-                    lambda: self._last_state == JablotronState.MAINTENANCE,
-                    self.BYPASS_ENTER_TIMEOUT,
-                )
-            if self._last_state != JablotronState.MAINTENANCE:
-                raise JablotronBypassError(
-                    f"cannot enter maintenance mode (state {self._last_state}); the system must be fully unset"
-                )
+            await self._enter_maintenance()
         for _ in range(3):
             if self._last_state == JablotronState.BYPASS and self._bypass_cursor is not None:
                 return
@@ -3254,14 +3273,15 @@ class JA80CentralUnit(object):
         if self._last_state != JablotronState.BYPASS or self._bypass_cursor is None:
             raise JablotronBypassError("bypass menu did not open")
 
-    async def _close_bypass_menu(self) -> None:
+    async def _leave_maintenance(self) -> None:
         for _ in range(4):
-            if JablotronState.is_disarmed_state(self._last_state):
+            # only press ESC while actually in maintenance / the bypass menu
+            if not JablotronState.is_maintenance_state(self._last_state):
                 return
             state = self._last_state
             await self._send_menu_key(JablotronBypass.KEY_BACK)
             await self._wait_for_state(lambda: self._last_state != state, self.BYPASS_STEP_TIMEOUT)
-        LOGGER.warning(f"bypass menu: could not return to unset state (state {self._last_state})")
+        LOGGER.warning(f"maintenance mode: could not return to unset state (state {self._last_state})")
 
     async def _next_bypass_position(self) -> Optional[int]:
         """Select the next detector in the menu, return its position (None if stuck)."""
@@ -3311,7 +3331,7 @@ class JA80CentralUnit(object):
                 await self._select_bypass_position(device_id)
                 await self._apply_bypass(wanted)
             finally:
-                await self._close_bypass_menu()
+                await self._leave_maintenance()
 
     async def read_bypasses(self) -> dict:
         """Walk the whole bypass menu once and return {position: bypass}."""
@@ -3327,12 +3347,45 @@ class JA80CentralUnit(object):
                     if await self._next_bypass_position() is None:
                         raise JablotronBypassError("bypass menu does not respond to keys")
             finally:
-                await self._close_bypass_menu()
+                await self._leave_maintenance()
             for device_id, device in self._devices.items():
                 if 0 < device_id <= 50:
                     device._bypass_supported = device_id in result
             self._bypass_known = True
             return result
+
+    # Entering "4 hh mm DD MM RR" takes a few seconds; the panel only keeps minutes.
+    CLOCK_ENTRY_SECONDS = 5
+
+    @staticmethod
+    def panel_time_keys(now: datetime.datetime) -> str:
+        """Keys that set the panel clock (Oasis manual ch. 17), rounded to the
+        minute the panel will be in once the last digit arrives."""
+        target = now + datetime.timedelta(seconds=JA80CentralUnit.CLOCK_ENTRY_SECONDS + 30)
+        return "4" + target.strftime("%H%M%d%m%y")
+
+    async def set_panel_time(self, clock=datetime.datetime.now) -> None:
+        """Set the panel clock to local time through the maintenance menu.
+
+        The panel logs leaving maintenance as an event with its new time, which
+        updates the panel time and drift sensors.
+        """
+        async with self._bypass_lock:
+            try:
+                await self._enter_maintenance()
+                keys = self.panel_time_keys(clock())
+                command = JablotronCommand(
+                    name="set panel time",
+                    code=b"".join(JablotronKeyPress.get_key_command(k) for k in keys),
+                    accepted_prefix=self.KEYPRESS_ACKS,
+                    # a resent half-entered time would set garbage
+                    max_retries=0,
+                )
+                await self._connection.add_command(command)
+                if not await command.wait_for_confirmation():
+                    raise JablotronMenuError("the panel did not accept the time")
+            finally:
+                await self._leave_maintenance()
 
     def load_bypass_snapshot(self, snapshot: Optional[dict]) -> None:
         """Seed bypasses from the last menu read stored in the config entry.
