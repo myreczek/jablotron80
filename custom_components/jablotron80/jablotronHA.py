@@ -17,6 +17,11 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 class JablotronEntity(Entity):
 
+    # Whether a name given to this entity in the UI renames the underlying
+    # object. Only the object's main entity does: several entities share one
+    # object, and a renamed battery sensor must not rename the whole detector.
+    _names_object = True
+
     def __init__(
         self,
         cu: JA80CentralUnit,
@@ -130,7 +135,7 @@ class JablotronEntity(Entity):
         # self._state = state
 
         # override internal configured name is it's been setup in the UI
-        if self.registry_entry.name is not None:
+        if self._names_object and self.registry_entry.name is not None:
             self._object.name = self.registry_entry.name
 
     async def async_will_remove_from_hass(self) -> None:

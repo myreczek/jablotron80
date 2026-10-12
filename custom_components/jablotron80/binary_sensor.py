@@ -102,6 +102,8 @@ class JablotronBatteryBinarySensor(JablotronEntity, BinarySensorEntity):
     Devices that have no battery concept simply report ``False``.
     """
 
+    _names_object = False
+
     def __init__(self, device: JablotronDevice, cu: JA80CentralUnit):
         super().__init__(cu, device)
 

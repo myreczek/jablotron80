@@ -41,6 +41,8 @@ class JablotronBypassSwitch(JablotronEntity, SwitchEntity, RestoreEntity):
     needs the system to be fully unset and uses the configured master code.
     """
 
+    _names_object = False
+
     def __init__(self, device: JablotronDevice, cu: JA80CentralUnit):
         super().__init__(cu, device)
 
