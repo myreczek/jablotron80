@@ -288,6 +288,11 @@ class Jablotron80AlarmControl(JablotronEntity, AlarmControlPanelEntity):
             return AlarmControlPanelState.DISARMED
         elif zone.status == JablotronZone.STATUS_DISARMING:
             return AlarmControlPanelState.DISARMING
+        elif zone.status == JablotronZone.STATUS_SERVICE:
+            # Maintenance and service mode can only be entered from a fully unset
+            # system (Oasis manual ch. 13), e.g. while bypasses are being read or
+            # changed - report it as disarmed rather than unknown.
+            return AlarmControlPanelState.DISARMED
 
         # #203: no mapped state for this zone status. Return None ("unknown") -
         # the previous `AlarmControlPanelState.UNKOWN` was a typo (no such enum

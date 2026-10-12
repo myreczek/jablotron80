@@ -119,3 +119,18 @@ def test_alarm_state_unmapped_status_returns_none():
     entity.get_active_zone = lambda: unmapped_zone
 
     assert entity.alarm_state is None
+
+
+def test_alarm_state_maintenance_is_disarmed():
+    """Maintenance/service (e.g. during a bypass change) reads as disarmed, not unknown."""
+    from custom_components.jablotron80.jablotron import JablotronZone
+
+    entity = Jablotron80AlarmControl.__new__(Jablotron80AlarmControl)
+    zone = types.SimpleNamespace(status=JablotronZone.STATUS_SERVICE, _id=1)
+    entity._cu = types.SimpleNamespace(mode="dummy-mode")
+    entity._object = zone
+    entity._zones = [zone]
+    entity._main_zone = 0
+    entity.get_active_zone = lambda: zone
+
+    assert entity.alarm_state == "disarmed"
