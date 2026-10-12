@@ -1258,8 +1258,8 @@ class JablotronMessage:
     def validate_length(main_type: str, record: bytes) -> bool:
         return len(record) == JablotronMessage.get_length(main_type, record)
 
-    # record types (first byte) for which crc7 needed the legacy fallback
-    _crc7_mismatch_types = set()
+    # record types (first byte) for which the checksum needed the legacy fallback
+    _checksum_mismatch_types = set()
 
     @staticmethod
     def check_crc(packet: bytes) -> bool:
@@ -1274,12 +1274,13 @@ class JablotronMessage:
         expected_checksum = packet[length - 2]
         data = packet[: length - 2]
 
-        if JablotronMessage.crc7(data) == expected_checksum:
+        # the checksum over the record including its checksum byte is 0
+        if JablotronMessage.checksum(packet[: length - 1]) == 0:
             return True
 
         # Fallback: the two CRC8 variants used before the panel's real checksum was
-        # known. Each matches only part of the records; keep them until crc7 has been
-        # confirmed for every record type, and log whenever they are still needed.
+        # known. Each matches only part of the records; keep them until the checksum
+        # has been confirmed for every record type, and log whenever they are needed.
         crcchecker = crccheck.crc.Crc(
             8, 70, initvalue=49, xor_output=0, reflect_input=False, reflect_output=False
         )
@@ -1302,28 +1303,31 @@ class JablotronMessage:
                 return False
 
         # once per record type, so a systematic mismatch is visible without flooding the log
-        if packet[0] not in JablotronMessage._crc7_mismatch_types:
-            JablotronMessage._crc7_mismatch_types.add(packet[0])
+        if packet[0] not in JablotronMessage._checksum_mismatch_types:
+            JablotronMessage._checksum_mismatch_types.add(packet[0])
             LOGGER.warning(
-                f"crc7 mismatch accepted by legacy CRC8 check (please report): {format_packet(packet)}"
+                f"checksum mismatch accepted by legacy CRC8 check (please report): {format_packet(packet)}"
             )
         return True
 
     @staticmethod
-    def crc7(data: bytes) -> int:
+    def checksum(msg: bytes) -> int:
         """The panel's record checksum, as computed by OLink (FUN_0057bdd4).
 
-        A 7-bit CRC, polynomial x^7+x^5+x+1 (0x23), initial value 0x7F, with the
-        data bits shifted in and one zero byte appended to flush the register.
-        Kept below 0x80 so it can never be mistaken for the 0xFF terminator.
+        Published by perexg in #152. Over a record without its 0xFF terminator
+        (checksum byte included) it is 0 when the record is intact. It is a 7-bit
+        CRC (polynomial x^7+x^5+x+1), so the checksum byte never reaches 0x80
+        and cannot be mistaken for the terminator.
         """
         crc = 0x7F
-        for byte in bytes(data) + b"\x00":
+        for byte in msg:
             for _ in range(8):
-                crc = ((crc << 1) & 0xFF) | (byte >> 7)
+                crc <<= 1
+                if byte & 0x80:
+                    crc += 1
                 if crc & 0x80:
                     crc ^= 0xA3
-                byte = (byte << 1) & 0xFF
+                byte <<= 1
         return crc
 
     @staticmethod

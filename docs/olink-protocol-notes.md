@@ -73,6 +73,12 @@ it). Matches 8/8 captured records, whereas each of the two `crccheck`
 variants in `JablotronMessage.check_crc` only matches about half of them —
 which is why the integration currently needs both.
 
+The same algorithm was published by perexg in upstream issue #152 (2023),
+also taken from OLink, in the equivalent "verify" form: run it over the whole
+record including the checksum byte (without `FF`) and expect 0. The
+integration uses that form (`JablotronMessage.checksum`); the two forms agree
+on all captured records and on 100 000 random ones.
+
 | record | olink_crc(data+00) |
 |--------|-------|
 | `ed 21 0b 04 01 00 00 32 2a ff` | `2a` |
