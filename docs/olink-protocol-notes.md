@@ -129,19 +129,35 @@ UI labels (EN.lng 11800–11807): Pos / Name / Bypass (None / Partial / Full) / 
 
 ## Texts (device / code names)
 
-* Read: `EC 40 0C 00` … `EC 40 0C 07` (8 lists). Parser `FUN_0053cfbc`:
-  reply `EC 00 00` = end of list → next list; `EC 38 04 …` = error/status
-  (`rec[4]/100 < 8` …); `EC 20..27 …` = data. **[code]** Record layout of the
-  data replies still to be decoded.
-* Write: `SETUP_SINGLE_TEXT_UNICODE` sends one text record; reply `EC 00 00` =
-  OK, `EC 00 xx` = error. Record encoding: `FUN_0059b810` / `FUN_0059b744`
-  (to do).
+* Read request: `EC 40 0C nn <crc7> FF`, nn = 00..07 (8 lists). **[code]**
+* On a JA-80K (firmware id below) every list answers `EC 00 00` (empty) - in
+  unset, maintenance and service mode alike, also right after `RQ_DEVICE_ID`.
+  The keypad shows custom names, so they are stored elsewhere (the wireless
+  JA-81F keypad keeps its own texts). **[tested 2026-10-12]**
+* `RQ_DEVICE_ID`: `E8 0D 22 FF` -> `B7 FF`, `E5 11 11 06 05 6F FF`. OLink sends
+  it before every text/picture operation (`FUN_0053caf4`). **[tested]**
+* Text encoding (`FUN_0059cb40`), 7-bit safe: `20..7F` ASCII; `10..17 b1` =
+  `((b0 & 7) << 7) | (b1 & 0x7F)` (U+0000..03FF, e.g. "a-acute" = `11 61`);
+  `18..1B b1 b2` = `((b0 & 3) << 14) | ((b1 & 0x7F) << 7) | (b2 & 0x7F)`.
+* Text address -> group: `FUN_0059cd7c` (byte 2 of the 24-bit text id).
+* Upload loop: `FUN_0053caf4` (one record per packet, waits for an ack).
 
 ## Logo picture (`JA80_SET_PICTURE`)
 
-* UI: 128×55 px, monochrome (EN.lng 02242).
-* `FUN_0053e614`: source is a text buffer — chars 1–3 = block length,
-  chars 5–7 = block count (max 49), data from char 9; block *i* is sent as
-  `EC 10 <i> <bytes…>`, ~80 ms apart. Bytes are written as comma-separated
-  numbers (`$` = hex) and parsed by `FUN_004cffd4`. **[code]**
-* Bitmap → buffer conversion (bit order, packing) not located yet.
+Format fully decoded (`FUN_0053ddd8`, `FUN_0053e614`, `FUN_004d0178` case
+0x2e) **[code]**:
+
+* width <= 128, height <= 50 rows (UI hint says 128x55); a pixel is 1 when
+  dark (all of R, G, B < 0x80 and R+G+B < 0x180)
+* one packet per row: row bytes MSB = leftmost pixel, each byte split into two
+  nibbles sent as `0x10 + nibble`; trailing zero nibbles dropped, padded to an
+  even nibble count with `10`:
+  `EC 10 <row> <nibbles...> 00 <crc7> FF`, ~80 ms apart
+* no reply from the panel; OLink only waits for its own packet to come back
+  as the bus echo - the picture goes over the wired bus straight to the keypads.
+
+Tested on a JA-80K through its serial port (no bus echo) with a wireless
+JA-81F keypad: all 48 rows sent in unset, maintenance and service mode, the
+keypad kept its old logo. Wireless keypads are programmed directly
+(`JA80_SET_PICTURE_WITHOUT_CENTRAL`, keypad cabled to the PC); with a wired
+JA-81E on the bus it may work. There is no GET_PICTURE command.
