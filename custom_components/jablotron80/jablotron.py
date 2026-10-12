@@ -7,7 +7,6 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import logging
 import serial
-import crccheck
 
 from custom_components.jablotron80.const import DEVICE_CONTROL_PANEL
 
@@ -1258,57 +1257,16 @@ class JablotronMessage:
     def validate_length(main_type: str, record: bytes) -> bool:
         return len(record) == JablotronMessage.get_length(main_type, record)
 
-    # record types (first byte) for which the checksum needed the legacy fallback
-    _checksum_mismatch_types = set()
-
     @staticmethod
     def check_crc(packet: bytes) -> bool:
+        """True if the record's checksum is right (#152).
 
-        length = len(packet)
-
-        if length <= 2:
-            LOGGER.debug("Short packet, no CRC to check")
-            return True
-
-        assert packet[length - 1] == 0xFF
-        expected_checksum = packet[length - 2]
-        data = packet[: length - 2]
-
-        # the checksum over the record including its checksum byte is 0
-        if JablotronMessage.checksum(packet[: length - 1]) == 0:
-            return True
-
-        # Fallback: the two CRC8 variants used before the panel's real checksum was
-        # known. Each matches only part of the records; keep them until the checksum
-        # has been confirmed for every record type, and log whenever they are needed.
-        crcchecker = crccheck.crc.Crc(
-            8, 70, initvalue=49, xor_output=0, reflect_input=False, reflect_output=False
-        )
-        checksum = crcchecker.calc(data)
-
-        # crc is always < 0x7f, probably dropped top bit because otherwise could be seen as end of packet (0xff). However have verified it is not an CRC7 algo!
-        if not checksum & 0x7F == expected_checksum:
-            # second attempt to check CRC with second algo, don't know why 2 different CRC algs required..... probabyl incorrect, but will see with more data, perhaps the xor_output value is derived from somewhere else?
-            crcchecker = crccheck.crc.Crc(
-                8,
-                70,
-                initvalue=49,
-                xor_output=35,
-                reflect_input=False,
-                reflect_output=False,
-            )
-            checksum = crcchecker.calc(data)
-
-            if not checksum & 0x7F == expected_checksum:
-                return False
-
-        # once per record type, so a systematic mismatch is visible without flooding the log
-        if packet[0] not in JablotronMessage._checksum_mismatch_types:
-            JablotronMessage._checksum_mismatch_types.add(packet[0])
-            LOGGER.warning(
-                f"checksum mismatch accepted by legacy CRC8 check (please report): {format_packet(packet)}"
-            )
-        return True
+        `packet` ends with the 0xFF terminator; the checksum over everything before
+        it, checksum byte included, is 0. Records too short to carry a checksum
+        (e.g. keypress acks "A0 FF") are accepted as they are.
+        """
+        msg = packet[:-1]
+        return len(msg) <= 1 or JablotronMessage.checksum(msg) == 0
 
     @staticmethod
     def checksum(msg: bytes) -> int:

@@ -37,7 +37,7 @@ From the repo root (`C:\dev\jablotron-upstream`):
 ```powershell
 # one-time setup
 C:\Python314\python.exe -m venv .venv
-.\.venv\Scripts\python.exe -m pip install pytest pyserial crccheck
+.\.venv\Scripts\python.exe -m pip install pytest pyserial
 
 # run the suite
 .\.venv\Scripts\python.exe -m pytest -v

@@ -1,7 +1,7 @@
 """The panel's record checksum (reverse engineered from OLink, FUN_0057bdd4).
 
-Every record below was captured on a JA-80K (2026-10-12). Each of the two
-legacy CRC8 variants only matches part of them; the checksum (#152) matches all.
+Every record below was captured on a JA-80K (2026-10-12); the checksum from
+#152 matches all of them (the CRC8 guesses used before only matched part).
 """
 
 import pytest
@@ -78,6 +78,11 @@ def test_check_crc_rejects_corrupted_record():
     packet = bytearray.fromhex("ed 21 0b 0c 11 00 00 32 1f ff")
     packet[3] = 0x0D  # wrong position, checksum no longer fits
     assert not JablotronMessage.check_crc(bytes(packet))
+
+
+@pytest.mark.parametrize("record", ["a0 ff", "ff"])
+def test_check_crc_accepts_records_without_checksum(record):
+    assert JablotronMessage.check_crc(bytes.fromhex(record))
 
 
 def test_checksum_never_sets_top_bit():
