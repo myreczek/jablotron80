@@ -343,10 +343,24 @@ class JablotronDevice(JablotronCommon):
     _tampered: bool = field(default=False, init=False)
     _battery_low: bool = field(default=False, init=False)
     _available: bool = field(default=True, init=False)
+    # Bypass state as read from the panel's bypass menu (see JablotronBypass):
+    # None = not read yet, otherwise one of JablotronBypass.NONE/ONE_PERIOD/PERMANENT.
+    _bypass: Optional[int] = field(default=None, init=False)
+    # False once a full read of the bypass menu did not list this device.
+    _bypass_supported: Optional[bool] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.enabled = True
+
+    @property
+    def bypass(self) -> Optional[int]:
+        return self._bypass
+
+    @bypass.setter
+    @log_change
+    def bypass(self, bypass: Optional[int]) -> None:
+        self._bypass = bypass
 
     @property
     def device_id(self) -> int:
@@ -892,13 +906,15 @@ class JablotronConnection:
                 LOGGER.exception("Unexpected error in packet loop")
         await self.disconnect()
 
-    async def read_until_found(self, prefix: str, max_records: int = 10) -> bool:
+    async def read_until_found(self, prefix: Union[bytes, tuple], max_records: int = 10) -> bool:
+        # a tuple accepts any of several prefixes (e.g. the various keypress acks)
+        prefixes = prefix if isinstance(prefix, tuple) else (prefix,)
         for i in range(max_records):
             records_tmp = await self._read_data()
             await self._forward_records(records_tmp)
             for record in records_tmp:
                 LOGGER.debug(f"record:{i}:{format_packet(record)}")
-                if record[: len(prefix)] == prefix:
+                if any(record[: len(p)] == p for p in prefixes):
                     return True
         return False
 
@@ -1480,6 +1496,59 @@ class JablotronState:
         return status in JablotronState.STATES_ALARM
 
 
+class JablotronBypassError(Exception):
+    pass
+
+
+class JablotronBypass:
+    """Detector bypass via the keypad's maintenance menu.
+
+    Reverse engineered from OLink 2.0.6 (docs/olink-protocol-notes.md) and
+    verified on a JA-80K: ``*0`` + master code enters maintenance, ``1`` opens
+    the bypass menu, ``1`` (^) / ``7`` (v) browse the detectors, ``2`` toggles
+    a bypass for one setting period, ``3`` toggles a permanent bypass and ``#``
+    leaves the menu (a second ``#`` leaves maintenance).
+
+    While the menu is open the panel sends state records
+    ``ED 21 <activity> <position> <flags> ..`` where ``(flags >> 4) & 3`` is
+    the bypass of the selected detector - the keypad's warning symbol flashing
+    (one period) or solid (permanent).
+    """
+
+    NONE = 0
+    ONE_PERIOD = 1
+    PERMANENT = 2
+
+    KEY_ENTER_MENU = "1"
+    KEY_NEXT = "7"
+    KEY_TOGGLE_ONE_PERIOD = "2"
+    KEY_TOGGLE_PERMANENT = "3"
+    KEY_BACK = "#"
+
+    @staticmethod
+    def parse(data: bytes) -> tuple:
+        """Return (position, bypass) from a bypass-menu state record."""
+        bypass = (data[4] >> 4) & 0x03
+        # OLink treats both flags set as permanent
+        if bypass == 3:
+            bypass = JablotronBypass.PERMANENT
+        return data[3], bypass
+
+    @staticmethod
+    def key_to_reach(current: int, wanted: int) -> Optional[str]:
+        """Key that moves the selected detector from `current` towards `wanted`.
+
+        Mirrors OLink's FUN_0057dda4. Returns None when nothing needs pressing.
+        """
+        if current == wanted:
+            return None
+        if current == JablotronBypass.ONE_PERIOD and wanted == JablotronBypass.NONE:
+            return JablotronBypass.KEY_TOGGLE_ONE_PERIOD
+        if current == JablotronBypass.NONE and wanted == JablotronBypass.ONE_PERIOD:
+            return JablotronBypass.KEY_TOGGLE_ONE_PERIOD
+        return JablotronBypass.KEY_TOGGLE_PERMANENT
+
+
 class JablotronButton(JablotronCommon):
     pass
 
@@ -1634,6 +1703,10 @@ class JA80CentralUnit(object):
         self._query.name = f"{CENTRAL_UNIT_MODEL} Query Button"
         self._query.type = "button"
 
+        self._bypass_query = JablotronButton(7)
+        self._bypass_query.name = f"{CENTRAL_UNIT_MODEL} Read bypasses"
+        self._bypass_query.type = "button"
+
         # #151 read-only: the panel's own clock (day/month/hour/minute) as reported
         # in event records, plus its drift vs HA time at that event. Both update ONLY
         # when an event arrives (arm/disarm/alarm/...), not continuously. None until
@@ -1668,6 +1741,16 @@ class JA80CentralUnit(object):
         self._force_query = False
         self._last_state = None
         self._mode = None
+
+        # Bypass menu: (position, bypass) of the detector currently selected in
+        # the menu, the condition notified on every state record, and a lock so
+        # only one bypass operation drives the keypad at a time.
+        self._bypass_cursor = None
+        self._state_received = asyncio.Condition()
+        self._bypass_lock = asyncio.Lock()
+        # True after one full read of the bypass menu; from then on changes are
+        # tracked passively (menu records, disarm, service mode).
+        self._bypass_known = False
 
         self._stop = asyncio.Event()
         self._havestate = asyncio.Event()  # has the first state message been received
@@ -1740,6 +1823,7 @@ class JA80CentralUnit(object):
             self._statustext,
             self._alert,
             self._query,
+            self._bypass_query,
             self._rf_level,
         ]
         objects = {id(obj): obj for obj in candidates if obj is not None}
@@ -1898,6 +1982,10 @@ class JA80CentralUnit(object):
     @property
     def query(self) -> JablotronButton:
         return self._query
+
+    @property
+    def bypass_query(self) -> JablotronButton:
+        return self._bypass_query
 
     @property
     def panel_time(self) -> JablotronSensor:
@@ -2431,6 +2519,9 @@ class JA80CentralUnit(object):
             DEFAULT_CONFIGURATION_QUERY_DETECTOR_ACTIVITY,
         ):
             return
+        # The query presses ESC, which would close the bypass menu mid-operation.
+        if self._bypass_lock.locked():
+            return
         if not self._device_query_pending:
             await self.send_detail_command()
 
@@ -2445,28 +2536,38 @@ class JA80CentralUnit(object):
         activity = data[2] & 0x3F  # take lower bit below 0x40
         detail = data[3]
         leds = data[4]
-        self.led_a = (leds & 0x08) == 0x08
-        self.led_b = (leds & 0x04) == 0x04
-        self.led_c = (leds & 0x02) == 0x02
-        self.led_power = (
-            leds & 0x01
-        ) == 0x01  # if this is not set, power is out on control panel and power led flashes
-        self.led_alarm = (leds & 0x10) == 0x10  # alert triagle may be flashing or solid
-        self.led_solid_alarm = (leds & 0x20) == 0x20  # The alert triangle is solid
-
-        if self.led_solid_alarm:
-            self.alert = "Fault"
-        elif self.led_alarm:
-            self.alert = "Alarm"
+        if status == JablotronState.BYPASS:
+            # In the bypass menu the warning symbol shows the selected detector's
+            # bypass, not an alarm/fault - read it as such and leave the LEDs alone.
+            self._update_bypass_cursor(data)
         else:
-            self.alert = "OK"
+            self._bypass_cursor = None
+            self.led_a = (leds & 0x08) == 0x08
+            self.led_b = (leds & 0x04) == 0x04
+            self.led_c = (leds & 0x02) == 0x02
+            self.led_power = (
+                leds & 0x01
+            ) == 0x01  # if this is not set, power is out on control panel and power led flashes
+            self.led_alarm = (leds & 0x10) == 0x10  # alert triagle may be flashing or solid
+            self.led_solid_alarm = (leds & 0x20) == 0x20  # The alert triangle is solid
+
+            if self.led_solid_alarm:
+                self.alert = "Fault"
+            elif self.led_alarm:
+                self.alert = "Alarm"
+            else:
+                self.alert = "OK"
 
         detail_2 = data[5]
         field_2 = data[6]
         # this is probably rf strength 00 = 0%, 0A = 10%, 1E = 75%, 28 = 100%?
         self.rf_level = int(data[7]) / 40.0 * 100.0
         # crc = data[8]
+        previous_state = self._last_state
         self._last_state = status
+        self._track_bypass_transition(previous_state, status)
+        async with self._state_received:
+            self._state_received.notify_all()
 
         by = detail if detail in [0x06, 0x12] else None
 
@@ -3093,6 +3194,177 @@ class JA80CentralUnit(object):
             await self.send_return_mode_command()
             return result
         return False
+
+    # Bypass menu timing: the panel sends a state record roughly every 0.3 s.
+    BYPASS_STEP_TIMEOUT = 3.0
+    BYPASS_ENTER_TIMEOUT = 10.0
+    BYPASS_MAX_STEPS = 64
+
+    def _update_bypass_cursor(self, data: bytes) -> None:
+        position, bypass = JablotronBypass.parse(data)
+        self._bypass_cursor = (position, bypass)
+        device = self._devices.get(position)
+        if device is not None and position > 0:
+            device.bypass = bypass
+
+    async def _wait_for_state(self, predicate, timeout: float) -> bool:
+        async with self._state_received:
+            try:
+                await asyncio.wait_for(self._state_received.wait_for(predicate), timeout)
+                return True
+            except asyncio.TimeoutError:
+                return predicate()
+
+    async def _send_menu_key(self, key: str) -> None:
+        # Menu keys are verified against the state records, never re-sent on a
+        # missing ack: a repeated "next" or "toggle" would act twice.
+        command = JablotronCommand(
+            name=f"bypass menu key {key}",
+            code=JablotronKeyPress.get_key_command(key),
+            accepted_prefix=tuple(bytes([0xA0 + i, 0xFF]) for i in range(8)),
+            max_retries=0,
+        )
+        await self._connection.add_command(command)
+        await command.wait_for_confirmation()
+
+    async def _open_bypass_menu(self) -> None:
+        if self._last_state != JablotronState.BYPASS:
+            if JablotronState.is_disarmed_state(self._last_state):
+                await self.send_keypress_sequence("*0" + self._master_code, b"\xa1", b"\xb8\xff")
+                await self._wait_for_state(
+                    lambda: self._last_state == JablotronState.MAINTENANCE,
+                    self.BYPASS_ENTER_TIMEOUT,
+                )
+            if self._last_state != JablotronState.MAINTENANCE:
+                raise JablotronBypassError(
+                    f"cannot enter maintenance mode (state {self._last_state}); the system must be fully unset"
+                )
+        for _ in range(3):
+            if self._last_state == JablotronState.BYPASS and self._bypass_cursor is not None:
+                return
+            # "1" opens the menu only from maintenance; inside the menu it means "previous"
+            if self._last_state == JablotronState.MAINTENANCE:
+                await self._send_menu_key(JablotronBypass.KEY_ENTER_MENU)
+            await self._wait_for_state(
+                lambda: self._last_state == JablotronState.BYPASS and self._bypass_cursor is not None,
+                self.BYPASS_STEP_TIMEOUT,
+            )
+        if self._last_state != JablotronState.BYPASS or self._bypass_cursor is None:
+            raise JablotronBypassError("bypass menu did not open")
+
+    async def _close_bypass_menu(self) -> None:
+        for _ in range(4):
+            if JablotronState.is_disarmed_state(self._last_state):
+                return
+            state = self._last_state
+            await self._send_menu_key(JablotronBypass.KEY_BACK)
+            await self._wait_for_state(lambda: self._last_state != state, self.BYPASS_STEP_TIMEOUT)
+        LOGGER.warning(f"bypass menu: could not return to unset state (state {self._last_state})")
+
+    async def _next_bypass_position(self) -> Optional[int]:
+        """Select the next detector in the menu, return its position (None if stuck)."""
+        position = self._bypass_cursor[0]
+        for _ in range(3):
+            await self._send_menu_key(JablotronBypass.KEY_NEXT)
+            if await self._wait_for_state(
+                lambda: self._bypass_cursor is not None and self._bypass_cursor[0] != position,
+                self.BYPASS_STEP_TIMEOUT,
+            ):
+                return self._bypass_cursor[0]
+        return None
+
+    async def _select_bypass_position(self, position: int) -> None:
+        seen = set()
+        for _ in range(self.BYPASS_MAX_STEPS):
+            current = self._bypass_cursor[0]
+            if current == position:
+                return
+            seen.add(current)
+            moved_to = await self._next_bypass_position()
+            if moved_to is None:
+                raise JablotronBypassError("bypass menu does not respond to keys")
+            if moved_to in seen and moved_to != position:
+                raise JablotronBypassError(f"detector {position} is not in the bypass menu")
+        raise JablotronBypassError(f"detector {position} not reached in the bypass menu")
+
+    async def _apply_bypass(self, wanted: int) -> None:
+        for _ in range(4):
+            position, current = self._bypass_cursor
+            key = JablotronBypass.key_to_reach(current, wanted)
+            if key is None:
+                return
+            await self._send_menu_key(key)
+            await self._wait_for_state(
+                lambda: self._bypass_cursor is not None and self._bypass_cursor != (position, current),
+                self.BYPASS_STEP_TIMEOUT,
+            )
+        if self._bypass_cursor[1] != wanted:
+            raise JablotronBypassError(f"bypass of detector {self._bypass_cursor[0]} was not changed")
+
+    async def set_bypass(self, device_id: int, wanted: int) -> None:
+        """Set the bypass of one detector through the keypad's maintenance menu."""
+        async with self._bypass_lock:
+            try:
+                await self._open_bypass_menu()
+                await self._select_bypass_position(device_id)
+                await self._apply_bypass(wanted)
+            finally:
+                await self._close_bypass_menu()
+
+    async def read_bypasses(self) -> dict:
+        """Walk the whole bypass menu once and return {position: bypass}."""
+        async with self._bypass_lock:
+            result = {}
+            try:
+                await self._open_bypass_menu()
+                for _ in range(self.BYPASS_MAX_STEPS):
+                    position, bypass = self._bypass_cursor
+                    if position in result:
+                        break
+                    result[position] = bypass
+                    if await self._next_bypass_position() is None:
+                        raise JablotronBypassError("bypass menu does not respond to keys")
+            finally:
+                await self._close_bypass_menu()
+            for device_id, device in self._devices.items():
+                if 0 < device_id <= 50:
+                    device._bypass_supported = device_id in result
+            self._bypass_known = True
+            return result
+
+    def load_bypass_snapshot(self, snapshot: Optional[dict]) -> None:
+        """Seed bypasses from the last menu read stored in the config entry.
+
+        Without a stored read every detector is assumed not bypassed.
+        """
+        for device_id, device in self._devices.items():
+            if not 0 < device_id <= 50 or device.bypass is not None:
+                continue
+            if snapshot is None:
+                device._bypass = JablotronBypass.NONE
+                continue
+            device._bypass_supported = str(device_id) in snapshot
+            if device._bypass_supported:
+                device._bypass = snapshot[str(device_id)]
+
+    def _track_bypass_transition(self, previous: Optional[int], status: int) -> None:
+        """Mirror what the panel does to bypasses on its own (Oasis manual, ch. 16)."""
+        if previous is None or previous == status:
+            return
+        if (
+            JablotronState.is_disarmed_state(status)
+            and previous & JablotronState.DISARMED
+            and not JablotronState.is_disarmed_state(previous)
+        ):
+            # unsetting the system ends every one-period bypass
+            for device in self._devices.values():
+                if device.bypass == JablotronBypass.ONE_PERIOD:
+                    device.bypass = JablotronBypass.NONE
+        elif JablotronState.is_service_state(status) and not JablotronState.is_service_state(previous):
+            # entering service mode clears all bypasses
+            for device in self._devices.values():
+                if device.bypass is not None:
+                    device.bypass = JablotronBypass.NONE
 
     async def send_keypress_sequence(
         self, key_sequence: str, accepted_prefix: bytes, complete_prefix: bytes = None

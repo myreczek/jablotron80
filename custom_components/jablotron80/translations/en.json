@@ -192,9 +192,13 @@
 					"require_code_to_disarm": "Require code to disarm",
 					"quieten_expected_warnings": "Quieten expected warnings",
 					"verbose_connection_logging": "Verbose connection logging",
-					"query_detector_activity": "Automatically query detector activity (may beep on keypad)"
+					"query_detector_activity": "Automatically query detector activity (may beep on keypad)",
+					"read_bypasses_now": "Read detector bypasses from the panel now (system must be unset)"
 				}
 			}
+		},
+		"error": {
+			"bypasses_unavailable": "Could not read detector bypasses! Is the system unset?"
 		}
 	}
 }

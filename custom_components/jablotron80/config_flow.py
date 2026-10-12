@@ -9,13 +9,18 @@ from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.core import callback
 
 LOGGER = logging.getLogger(__name__)
+from . import store_bypasses
 from .jablotron import (
     JA80CentralUnit,
     JablotronConstants,
     JablotronDevice,
     JablotronCode,
+    JablotronBypassError,
 )
 from .const import (
+    DATA_JABLOTRON,
+    CONFIGURATION_BYPASSES,
+    CONFIGURATION_READ_BYPASSES_NOW,
     CONFIGURATION_SERIAL_PORT,
     CONFIGURATION_NUMBER_OF_WIRED_DEVICES,
     CONFIGURATION_PASSWORD,
@@ -98,6 +103,13 @@ class Jablotron80ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             cu = JA80CentralUnit(None, self._config, None)
             await cu.initialize()
             result = await cu.read_settings()
+            if result:
+                try:
+                    bypasses = await cu.read_bypasses()
+                    self._config[CONFIGURATION_BYPASSES] = {str(k): v for k, v in bypasses.items()}
+                except JablotronBypassError as ex:
+                    # not fatal: the integration reads them on its first start instead
+                    LOGGER.warning(f"Could not read detector bypasses: {ex}")
             self._config[CONFIGURATION_CENTRAL_SETTINGS] = {
                 DEVICE_CONFIGURATION_REQUIRE_CODE_TO_ARM: cu.is_code_required_for_arm(),
                 DEVICE_CONFIGURATION_SYSTEM_MODE: cu.mode,
@@ -261,11 +273,17 @@ class JablotronOptionsFlow(config_entries.OptionsFlow):
         self._config_entry: config_entries.ConfigEntry = config_entry
 
     async def async_step_init(self, user_input: Optional[Dict[str, Any]] = None):
+        errors = {}
         if user_input is not None:
-            return self.async_create_entry(title=NAME, data=user_input)
+            read_now = user_input.pop(CONFIGURATION_READ_BYPASSES_NOW, False)
+            if read_now:
+                errors = await self._read_bypasses()
+            if not errors:
+                return self.async_create_entry(title=NAME, data=user_input)
 
         return self.async_show_form(
             step_id="init",
+            errors=errors,
             data_schema=vol.Schema(
                 {
                     vol.Optional(
@@ -303,6 +321,23 @@ class JablotronOptionsFlow(config_entries.OptionsFlow):
                             DEFAULT_CONFIGURATION_VERBOSE_CONNECTION_LOGGING,
                         ),
                     ): bool,
+                    vol.Optional(CONFIGURATION_READ_BYPASSES_NOW, default=False): bool,
                 }
             ),
         )
+
+    async def _read_bypasses(self) -> Dict[str, str]:
+        """Read the bypass menu with the running integration and store the result."""
+        entry = self._config_entry
+        cu = self.hass.data[DOMAIN][entry.entry_id][DATA_JABLOTRON]
+        try:
+            bypasses = await cu.read_bypasses()
+        except JablotronBypassError as ex:
+            LOGGER.warning(f"Could not read detector bypasses: {ex}")
+            return {"base": "bypasses_unavailable"}
+        listed_before = set(entry.data.get(CONFIGURATION_BYPASSES) or {})
+        store_bypasses(self.hass, entry, bypasses)
+        if {str(k) for k in bypasses} != listed_before:
+            # the set of bypass switches changed - rebuild the entities
+            self.hass.config_entries.async_schedule_reload(entry.entry_id)
+        return {}

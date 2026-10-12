@@ -106,6 +106,7 @@ def _install_homeassistant_stubs() -> None:
     ha_comp_binary = _platform_module("binary_sensor", "binary_sensor")
     ha_comp_sensor = _platform_module("sensor", "sensor")
     ha_comp_button = _platform_module("button", "button")
+    ha_comp_switch = _platform_module("switch", "switch")
 
     # homeassistant.helpers with device_registry and config_validation.
     ha_helpers = types.ModuleType("homeassistant.helpers")
@@ -173,6 +174,7 @@ def _install_homeassistant_stubs() -> None:
     sys.modules["homeassistant.components.binary_sensor"] = ha_comp_binary
     sys.modules["homeassistant.components.sensor"] = ha_comp_sensor
     sys.modules["homeassistant.components.button"] = ha_comp_button
+    sys.modules["homeassistant.components.switch"] = ha_comp_switch
     sys.modules["homeassistant.helpers"] = ha_helpers
     sys.modules["homeassistant.helpers.device_registry"] = ha_dr
     sys.modules["homeassistant.helpers.config_validation"] = ha_cv

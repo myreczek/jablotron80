@@ -5,6 +5,7 @@ from homeassistant.components.alarm_control_panel import (
 from homeassistant.components.binary_sensor import DOMAIN as PLATFORM_BINARY_SENSOR
 from homeassistant.components.sensor import DOMAIN as PLATFORM_SENSOR
 from homeassistant.components.button import DOMAIN as PLATFORM_BUTTON
+from homeassistant.components.switch import DOMAIN as PLATFORM_SWITCH
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, config_validation as cv
@@ -18,6 +19,7 @@ from .const import (
     CABLE_MODEL,
     MANUFACTURER,
     CABLE_MODELS,
+    CONFIGURATION_BYPASSES,
 )
 from .jablotron import JA80CentralUnit
 
@@ -28,6 +30,7 @@ PLATFORMS = [
     PLATFORM_BINARY_SENSOR,
     PLATFORM_SENSOR,
     PLATFORM_BUTTON,
+    PLATFORM_SWITCH,
 ]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -51,6 +54,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     cu = JA80CentralUnit(hass, entry.data, entry.options)
     await cu.initialize()
+    # Bypasses come from the last menu read (setup wizard / options) and are then
+    # tracked passively.
+    cu.load_bypass_snapshot(entry.data.get(CONFIGURATION_BYPASSES))
 
     device_registry = dr.async_get(hass)
     device_registry.async_get_or_create(
@@ -84,6 +90,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     await cu.shutdown()
     hass.data[DOMAIN].pop(entry.entry_id)
     return True
+
+
+def store_bypasses(hass: HomeAssistant, entry: ConfigEntry, bypasses: dict) -> None:
+    """Remember which detectors the bypass menu offers and their last state."""
+    data = {**entry.data, CONFIGURATION_BYPASSES: {str(k): v for k, v in bypasses.items()}}
+    hass.config_entries.async_update_entry(entry, data=data)
 
 
 async def options_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:

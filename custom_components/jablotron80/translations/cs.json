@@ -191,9 +191,13 @@
                     "require_code_to_arm": "Vyžadovat kód při zajištění",
                     "require_code_to_disarm": "Vyžadovat kód při odjištění",
                     "quieten_expected_warnings": "Potlačit očekávaná varování",
-                    "verbose_connection_logging": "Podrobné protokolování připojení"
+                    "verbose_connection_logging": "Podrobné protokolování připojení",
+                    "read_bypasses_now": "Načíst bypassy čidel z ústředny teď (systém musí být odjištěný)"
                 }
             }
+        },
+        "error": {
+            "bypasses_unavailable": "Bypassy čidel se nepodařilo načíst. Je systém odjištěný?"
         }
     }
 }

@@ -43,6 +43,10 @@ DEFAULT_CONFIGURATION_REQUIRE_CODE_TO_ARM = True
 DEFAULT_CONFIGURATION_REQUIRE_CODE_TO_DISARM = True
 DEFAULT_CONFIGURATION_QUIETEN_EXPECTED_WARNINGS = False
 DEFAULT_CONFIGURATION_VERBOSE_CONNECTION_LOGGING = False
+# {"<position>": bypass} as last read from the panel's bypass menu (entry data)
+CONFIGURATION_BYPASSES = "bypasses"
+# options-flow action, not stored
+CONFIGURATION_READ_BYPASSES_NOW = "read_bypasses_now"
 
 # Set default Log Level to Debug
 # LOGGER.setLevel(logging.DEBUG)
