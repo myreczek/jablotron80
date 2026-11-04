@@ -864,12 +864,14 @@ class JablotronConnection:
                             if found:
                                 LOGGER.debug(f"keypress accepted, sequence:{i}")
                                 accepted = True
+                            elif send_cmd.ack_optional:
+                                # The panel often drops the ack of a key it did take.
+                                # The caller verifies the effect, so send the rest of
+                                # the sequence instead of leaving it half entered.
+                                LOGGER.info(f"no accepted message for sequence:{i} received, continuing")
+                                accepted = True
                             else:
-                                level = (
-                                    logging.INFO
-                                    if send_cmd.ack_optional
-                                    else self._no_ack_log_level(send_cmd.name, retries)
-                                )
+                                level = self._no_ack_log_level(send_cmd.name, retries)
                                 LOGGER.log(level, f"no accepted message for sequence:{i} received")
                                 accepted = False
                                 break
@@ -1670,6 +1672,8 @@ class JA80CentralUnit(object):
         self._master_code = config[CONFIGURATION_PASSWORD]
         # device registry id of the cable device, set by the integration setup
         self.cable_device_id = None
+        # time.monotonic() of the last event that reported the panel clock
+        self._panel_clock_at = None
         # this is in scale 0 - 40, 0 - 100% ?
         self._rf_level = JablotronSensor(1)
         self._rf_level.name = f"{CENTRAL_UNIT_MODEL} RF level"
@@ -2820,6 +2824,7 @@ class JA80CentralUnit(object):
             aware = panel_dt.replace(tzinfo=local_tz)
             self._panel_time.value = aware
             self._panel_time_drift.value = round((aware - datetime.datetime.now(local_tz)).total_seconds())
+            self._panel_clock_at = time.monotonic()
         except Exception:
             pass
 
@@ -3357,28 +3362,49 @@ class JA80CentralUnit(object):
         target = now + datetime.timedelta(seconds=JA80CentralUnit.CLOCK_ENTRY_SECONDS + 30)
         return "4" + target.strftime("%H%M%d%m%y")
 
+    # Drift right after a good sync: the panel drops seconds and gets the nearest
+    # minute, events report whole minutes.
+    CLOCK_SYNCED_DRIFT = (-90, 45)
+    CLOCK_ATTEMPTS = 2
+    CLOCK_VERIFY_TIMEOUT = 10.0
+
     async def set_panel_time(self, clock=datetime.datetime.now) -> None:
         """Set the panel clock to local time through the maintenance menu.
 
-        The panel logs leaving maintenance as an event with its new time, which
-        updates the panel time and drift sensors.
+        The panel logs leaving maintenance as an event with its new time; that
+        event verifies the result, and a time that did not take is entered once
+        more (setting the clock again is harmless).
         """
         async with self._bypass_lock:
-            try:
-                await self._enter_maintenance()
-                keys = self.panel_time_keys(clock())
-                command = JablotronCommand(
-                    name="set panel time",
-                    code=b"".join(JablotronKeyPress.get_key_command(k) for k in keys),
-                    accepted_prefix=self.KEYPRESS_ACKS,
-                    # a resent half-entered time would set garbage
-                    max_retries=0,
-                )
-                await self._connection.add_command(command)
-                if not await command.wait_for_confirmation():
-                    raise JablotronMenuError("the panel did not accept the time")
-            finally:
-                await self._leave_maintenance()
+            for attempt in range(1, self.CLOCK_ATTEMPTS + 1):
+                try:
+                    await self._enter_maintenance()
+                    keys = self.panel_time_keys(clock())
+                    command = JablotronCommand(
+                        name="set panel time",
+                        code=b"".join(JablotronKeyPress.get_key_command(k) for k in keys),
+                        accepted_prefix=self.KEYPRESS_ACKS,
+                        # never re-sent as a whole: a repeated sequence would be garbage
+                        max_retries=0,
+                        ack_optional=True,
+                    )
+                    await self._connection.add_command(command)
+                    await command.wait_for_confirmation()
+                    entered_at = time.monotonic()
+                finally:
+                    await self._leave_maintenance()
+                if not await self._wait_for_state(
+                    lambda: self._panel_clock_at is not None and self._panel_clock_at > entered_at,
+                    self.CLOCK_VERIFY_TIMEOUT,
+                ):
+                    LOGGER.info("panel time sent; no event to verify it")
+                    return
+                drift = self._panel_time_drift.value
+                low, high = self.CLOCK_SYNCED_DRIFT
+                if low <= drift <= high:
+                    return
+                LOGGER.info(f"panel time did not take (drift {drift} s), attempt {attempt}")
+            raise JablotronMenuError(f"the panel clock is still off by {drift} s")
 
     def load_bypass_snapshot(self, snapshot: Optional[dict]) -> None:
         """Seed bypasses from the last menu read stored in the config entry.

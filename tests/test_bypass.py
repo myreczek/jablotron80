@@ -96,6 +96,7 @@ class FakePanel:
         self.drop_every = drop_every
         self._count = 0
         self.update_devices = False
+        self.on_unset = None
 
     def record(self) -> bytes:
         if self.mode == "bypass":
@@ -111,6 +112,8 @@ class FakePanel:
             self.mode, self.index = "bypass", 0
         elif self.mode == "maintenance" and key == "#":
             self.mode = "unset"
+            if self.on_unset is not None:
+                self.on_unset()
         elif self.mode == "bypass":
             position = self.positions[self.index]
             current = self.bypass.get(position, NONE)
@@ -157,6 +160,7 @@ def _run(loop, unit, panel, coro):
     unit._connection = panel
     unit.BYPASS_STEP_TIMEOUT = 0.2
     unit.UNSET_SETTLE_TIMEOUT = 0.2
+    unit.CLOCK_VERIFY_TIMEOUT = 0.2
     unit.BYPASS_ENTER_TIMEOUT = 0.5
     initial = panel.record()
     loop.run_until_complete(unit._process_state(initial, initial.hex()))
@@ -216,6 +220,7 @@ def test_refuses_when_armed(event_loop_for_setters):
     unit._connection = panel
     unit.BYPASS_STEP_TIMEOUT = 0.2
     unit.UNSET_SETTLE_TIMEOUT = 0.2
+    unit.CLOCK_VERIFY_TIMEOUT = 0.2
     event_loop_for_setters.run_until_complete(unit._process_state(armed, armed.hex()))
 
     with pytest.raises(JablotronMenuError, match="fully unset"):
