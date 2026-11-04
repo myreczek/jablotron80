@@ -156,6 +156,7 @@ def _run(loop, unit, panel, coro):
     jablotron._loop = loop
     unit._connection = panel
     unit.BYPASS_STEP_TIMEOUT = 0.2
+    unit.UNSET_SETTLE_TIMEOUT = 0.2
     unit.BYPASS_ENTER_TIMEOUT = 0.5
     initial = panel.record()
     loop.run_until_complete(unit._process_state(initial, initial.hex()))
@@ -214,6 +215,7 @@ def test_refuses_when_armed(event_loop_for_setters):
     jablotron._loop = event_loop_for_setters
     unit._connection = panel
     unit.BYPASS_STEP_TIMEOUT = 0.2
+    unit.UNSET_SETTLE_TIMEOUT = 0.2
     event_loop_for_setters.run_until_complete(unit._process_state(armed, armed.hex()))
 
     with pytest.raises(JablotronMenuError, match="fully unset"):

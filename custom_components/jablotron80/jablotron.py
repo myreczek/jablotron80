@@ -3227,7 +3227,17 @@ class JA80CentralUnit(object):
         await self._connection.add_command(command)
         await command.wait_for_confirmation()
 
+    # The alarm entity turns "disarmed" on the disarm event record; the panel's
+    # state record follows a moment later. Wait that long before giving up.
+    UNSET_SETTLE_TIMEOUT = 3.0
+
     async def _enter_maintenance(self) -> None:
+        if self._last_state != JablotronState.MAINTENANCE and not JablotronState.is_disarmed_state(self._last_state):
+            await self._wait_for_state(
+                lambda: JablotronState.is_disarmed_state(self._last_state)
+                or self._last_state == JablotronState.MAINTENANCE,
+                self.UNSET_SETTLE_TIMEOUT,
+            )
         if JablotronState.is_disarmed_state(self._last_state):
             await self.send_keypress_sequence("*0" + self._master_code, b"\xa1", b"\xb8\xff")
             await self._wait_for_state(
@@ -3236,7 +3246,7 @@ class JA80CentralUnit(object):
             )
         if self._last_state != JablotronState.MAINTENANCE:
             raise JablotronMenuError(
-                f"cannot enter maintenance mode (state {self._last_state}); the system must be fully unset"
+                f"cannot enter maintenance mode (state {hex(self._last_state) if isinstance(self._last_state, int) else self._last_state}); the system must be fully unset"
             )
 
     async def _open_bypass_menu(self) -> None:

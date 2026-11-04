@@ -45,9 +45,40 @@ def test_set_panel_time_refuses_when_armed(event_loop_for_setters):
     jablotron._loop = event_loop_for_setters
     unit._connection = panel
     unit.BYPASS_STEP_TIMEOUT = 0.2
+    unit.UNSET_SETTLE_TIMEOUT = 0.2
     event_loop_for_setters.run_until_complete(unit._process_state(armed, armed.hex()))
 
     with pytest.raises(JablotronMenuError, match="fully unset"):
         event_loop_for_setters.run_until_complete(unit.set_panel_time())
 
     assert panel.keys == []
+
+
+def test_set_panel_time_waits_for_the_unset_record(event_loop_for_setters):
+    """The disarm event flips the alarm entity before the panel's state record
+    says unset; an automation reacting at once must not be refused."""
+    import asyncio
+
+    unit = _build_unit()
+    panel = FakePanel(unit, positions=[2])
+    jablotron._loop = event_loop_for_setters
+    unit._connection = panel
+    unit.BYPASS_STEP_TIMEOUT = 0.2
+    unit.UNSET_SETTLE_TIMEOUT = 0.2
+    unit.BYPASS_ENTER_TIMEOUT = 0.5
+    armed = bytes.fromhex("ed 42 00 00 05 00 00 00 00 ff")  # set AB
+    event_loop_for_setters.run_until_complete(unit._process_state(armed, armed.hex()))
+    clock = lambda: datetime.datetime(2026, 11, 4, 6, 2, 43)
+
+    async def scenario():
+        task = asyncio.ensure_future(unit.set_panel_time(clock))
+        await asyncio.sleep(0.05)
+        panel.mode = "unset"
+        unset = panel.record()
+        await unit._process_state(unset, unset.hex())
+        await task
+
+    event_loop_for_setters.run_until_complete(scenario())
+
+    assert panel.keys == ["*0+code", "40603041126", "#"]
+    assert panel.mode == "unset"
