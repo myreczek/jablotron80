@@ -47,6 +47,8 @@ DEFAULT_CONFIGURATION_VERBOSE_CONNECTION_LOGGING = False
 CONFIGURATION_BYPASSES = "bypasses"
 # options-flow action, not stored
 CONFIGURATION_READ_BYPASSES_NOW = "read_bypasses_now"
+# options-flow action: an uploaded picture sent to the keypads, not stored
+CONFIGURATION_KEYPAD_IMAGE = "keypad_image"
 
 # Set default Log Level to Debug
 # LOGGER.setLevel(logging.DEBUG)

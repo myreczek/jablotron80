@@ -200,14 +200,17 @@
                     "quieten_expected_warnings": "Potlačit očekávaná varování",
                     "verbose_connection_logging": "Podrobné protokolování připojení",
                     "query_detector_activity": "Automaticky dotazovat aktivitu čidel (může způsobit pípání klávesnice)",
-                    "read_bypasses_now": "Načíst bypassy čidel z ústředny teď (systém musí být odjištěný)"
+                    "read_bypasses_now": "Načíst bypassy čidel z ústředny teď (systém musí být odjištěný)",
+                    "keypad_image": "Nahrát logo do klávesnice (nejvýš 128×50 px; ústředna v servisu, klávesnice kabelem na sběrnici)"
                 },
                 "description": "Pro sledování a ovládání alarmu bez automatického dotazování čidel vypněte příslušnou volbu. Stavy čidel mohou být neúplné nebo zastaralé; neaktivní stav nepotvrzuje zavřené dveře ani nepřítomnost kouře. Stav alarmu a jeho ovládání zůstávají dostupné. Tlačítko ručního dotazu nadále funguje a může způsobit pípání klávesnice."
             }
         },
         "error": {
             "credentials_unavailable": "Kódy se nepodařilo načíst, dešifrovat nebo převést. Zkontrolujte původní klíč, absolutní cestu k souboru, oprávnění pouze pro vlastníka a úložiště. Nastavení nebylo použito.",
-            "bypasses_unavailable": "Bypassy čidel se nepodařilo načíst. Je systém odjištěný?"
+            "bypasses_unavailable": "Bypassy čidel se nepodařilo načíst. Je systém odjištěný?",
+            "keypad_image_invalid": "Obrázek pro klávesnici nelze použít. Musí mít nejvýš 128×50 bodů.",
+            "keypad_image_failed": "Logo se nepodařilo odeslat. Je ústředna v servisním režimu (zadaném na klávesnici)?"
         }
     }
 }

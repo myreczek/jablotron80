@@ -183,7 +183,7 @@
 		}
 	},
 	"options": {
-		"error": {"credentials_unavailable": "Could not read, decrypt or migrate codes. Check the original key, absolute file path, owner-only permissions, and storage. Settings were not applied.", "bypasses_unavailable": "Could not read detector bypasses! Is the system unset?"},
+		"error": {"credentials_unavailable": "Could not read, decrypt or migrate codes. Check the original key, absolute file path, owner-only permissions, and storage. Settings were not applied.", "bypasses_unavailable": "Could not read detector bypasses! Is the system unset?", "keypad_image_invalid": "The keypad image cannot be used. It must be a picture of at most 128x50 pixels.", "keypad_image_failed": "Could not send the keypad image. Is the panel in service mode (entered on the keypad)?"},
 		"step": {
 			"init": {
 				"title": "Options",
@@ -201,7 +201,8 @@
 					"quieten_expected_warnings": "Quieten expected warnings",
 					"verbose_connection_logging": "Verbose connection logging",
 					"query_detector_activity": "Automatically query detector activity (may beep on keypad)",
-					"read_bypasses_now": "Read detector bypasses from the panel now (system must be unset)"
+					"read_bypasses_now": "Read detector bypasses from the panel now (system must be unset)",
+					"keypad_image": "Upload a logo to the keypad (at most 128x50 px; panel in service mode, keypad cabled to the bus)"
 				}
 			}
 		}

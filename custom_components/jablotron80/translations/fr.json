@@ -183,7 +183,7 @@
 		}
 	},
 	"options": {
-		"error": {"credentials_unavailable": "Impossible de lire, de déchiffrer ou de migrer les codes. Vérifiez la clé d’origine, le chemin absolu du fichier, les permissions réservées au propriétaire et le stockage. Les paramètres n’ont pas été appliqués.", "bypasses_unavailable": "Could not read detector bypasses! Is the system unset?"},
+		"error": {"credentials_unavailable": "Impossible de lire, de déchiffrer ou de migrer les codes. Vérifiez la clé d’origine, le chemin absolu du fichier, les permissions réservées au propriétaire et le stockage. Les paramètres n’ont pas été appliqués.", "bypasses_unavailable": "Could not read detector bypasses! Is the system unset?", "keypad_image_invalid": "L’image du clavier est inutilisable. Elle doit faire au maximum 128x50 pixels.", "keypad_image_failed": "Impossible d’envoyer l’image du clavier. La centrale est-elle en mode service (activé sur le clavier) ?"},
 		"step": {
 			"init": {
 				"title": "Options",
@@ -201,7 +201,8 @@
 					"quieten_expected_warnings": "Apaiser les avertissements attendus",
 					"verbose_connection_logging": "Journalisation détaillée des connexions",
 					"query_detector_activity": "Interroger automatiquement l’activité des détecteurs (peut provoquer un bip sur le clavier)",
-					"read_bypasses_now": "Read detector bypasses from the panel now (system must be unset)"
+					"read_bypasses_now": "Read detector bypasses from the panel now (system must be unset)",
+					"keypad_image": "Envoyer un logo au clavier (128x50 px au maximum ; centrale en mode service, clavier câblé au bus)"
 				}
 			}
 		}

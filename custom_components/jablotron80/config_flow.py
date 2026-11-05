@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, List
 from homeassistant import config_entries, core, exceptions
 from homeassistant.data_entry_flow import AbortFlow
 from homeassistant.core import callback
+from homeassistant.helpers.selector import FileSelector, FileSelectorConfig
 
 LOGGER = logging.getLogger(__name__)
 from . import store_bypasses
@@ -21,6 +22,7 @@ from .const import (
     DATA_JABLOTRON,
     CONFIGURATION_BYPASSES,
     CONFIGURATION_READ_BYPASSES_NOW,
+    CONFIGURATION_KEYPAD_IMAGE,
     CONFIGURATION_CODE_MODE,
     CODE_MODE_COMMON,
     CODE_MODE_PERSONAL,
@@ -295,6 +297,9 @@ class JablotronOptionsFlow(config_entries.OptionsFlow):
             # an action, not a stored option; a failed read shows the form again
             if options.pop(CONFIGURATION_READ_BYPASSES_NOW, False):
                 errors = await self._read_bypasses()
+            image = options.pop(CONFIGURATION_KEYPAD_IMAGE, None)
+            if image and not errors:
+                errors = await self._upload_keypad_image(image)
             if not errors:
                 try:
                     await async_setup_user_codes(self.hass)
@@ -371,9 +376,27 @@ class JablotronOptionsFlow(config_entries.OptionsFlow):
                         ),
                     ): bool,
                     vol.Optional(CONFIGURATION_READ_BYPASSES_NOW, default=False): bool,
+                    vol.Optional(CONFIGURATION_KEYPAD_IMAGE): FileSelector(FileSelectorConfig(accept="image/*")),
                 }
             ),
         )
+
+    async def _upload_keypad_image(self, file_id: str) -> Dict[str, str]:
+        """Send an uploaded picture to the keypads on the bus."""
+        from .keypad_image import load_uploaded
+
+        try:
+            pixels = await self.hass.async_add_executor_job(load_uploaded, self.hass, file_id)
+        except (OSError, ValueError) as ex:
+            LOGGER.warning(f"Unusable keypad image: {ex}")
+            return {"base": "keypad_image_invalid"}
+        cu = self.hass.data[DOMAIN][self._config_entry.entry_id][DATA_JABLOTRON]
+        try:
+            await cu.upload_keypad_image(pixels)
+        except JablotronMenuError as ex:
+            LOGGER.warning(f"Could not upload the keypad image: {ex}")
+            return {"base": "keypad_image_failed"}
+        return {}
 
     async def _read_bypasses(self) -> Dict[str, str]:
         """Read the bypass menu with the running integration and store the result."""

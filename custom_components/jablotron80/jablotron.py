@@ -685,6 +685,9 @@ class JablotronCommand:
     # The caller verifies the effect itself (e.g. bypass menu keys against the
     # state records), so a missing ack is expected and only logged at INFO.
     ack_optional: bool = False
+    # `code` is one whole record written as is, not a key sequence. The panel
+    # does not answer it (keypad image rows), so there is no ack to wait for.
+    raw: bool = False
 
     def __post_init__(self) -> None:
         self._event = asyncio.Event()
@@ -838,7 +841,13 @@ class JablotronConnection:
                 await self._forward_records(records)
                 send_cmd = await self._get_command()
 
-                if send_cmd is not None:
+                if send_cmd is not None and send_cmd.raw:
+                    await asyncio.to_thread(self._connection.write, send_cmd.code)
+                    LOGGER.debug(f"record sent: {send_cmd}")
+                    send_cmd.confirm(True)
+                    self._cmd_q.task_done()
+                    self._send_cmd = None
+                elif send_cmd is not None:
                     accepted = False
                     confirmed = False
                     # Per-command retry budget (see JablotronCommand.max_retries).
@@ -1477,6 +1486,51 @@ class JablotronState:
     @staticmethod
     def is_alarm_state(status):
         return status in JablotronState.STATES_ALARM
+
+
+class JablotronKeypadImage:
+    """The keypad logo, encoded as OLink sends it ("Upload image to keypad").
+
+    OLink converts at most 128x50 pixels (FUN_0053ddd8) and sends at most 49
+    rows (FUN_0053e614), one record per row: `EC 10 <row> <nibbles> 00 <crc> FF`.
+    Each pixel byte (MSB = leftmost) goes out as two nibbles `0x10 + n`, trailing
+    zero nibbles are dropped and the rest padded to an even count. The panel does
+    not answer; the rows go over the bus to keypads cabled to it (a wireless
+    JA-81F only while it is wired). Verified 2026-11-05: identical to an OLink
+    2.0.6 capture for all 49 rows, and the logo appeared on a wired JA-81F.
+    """
+
+    WIDTH = 128
+    HEIGHT = 50
+    ROWS_SENT = 49
+    # OLink sent one row every ~0.18 s, waiting for each row's bus echo
+    ROW_INTERVAL = 0.15
+
+    @staticmethod
+    def is_dark(red: int, green: int, blue: int) -> bool:
+        """OLink's threshold for a lit (dark) pixel."""
+        return red < 0x80 and green < 0x80 and blue < 0x80 and red + green + blue < 0x180
+
+    @classmethod
+    def rows(cls, pixels: List[List[bool]]) -> List[bytes]:
+        """Records for a picture given as rows of pixels (True = dark)."""
+        if not pixels or len(pixels) > cls.HEIGHT or any(len(row) > cls.WIDTH for row in pixels):
+            raise ValueError(f"the keypad image must be at most {cls.WIDTH}x{cls.HEIGHT} pixels")
+        return [cls.row_record(y, row) for y, row in enumerate(pixels[: cls.ROWS_SENT])]
+
+    @staticmethod
+    def row_record(y: int, row: List[bool]) -> bytes:
+        nibbles = []
+        for x in range(0, len(row), 8):
+            byte = sum(0x80 >> bit for bit, dark in enumerate(row[x : x + 8]) if dark)
+            nibbles += [byte >> 4, byte & 0x0F]
+        while nibbles and nibbles[-1] == 0:
+            nibbles.pop()
+        if len(nibbles) % 2:
+            nibbles.append(0)
+        body = bytes([0xEC, 0x10, y] + [0x10 + n for n in nibbles] + [0x00])
+        crc = next(c for c in range(0x80) if JablotronMessage.checksum(body + bytes([c])) == 0)
+        return body + bytes([crc, 0xFF])
 
 
 class JablotronMenuError(Exception):
@@ -3405,6 +3459,25 @@ class JA80CentralUnit(object):
                     return
                 LOGGER.info(f"panel time did not take (drift {drift} s), attempt {attempt}")
             raise JablotronMenuError(f"the panel clock is still off by {drift} s")
+
+    async def upload_keypad_image(self, pixels: List[List[bool]]) -> None:
+        """Send a logo to the keypads on the bus, row by row as OLink does.
+
+        Only tried in service mode, which the user enters on the keypad; the
+        integration does not switch modes for this.
+        """
+        if not isinstance(self._connection, JablotronConnectionSerial):
+            raise JablotronMenuError("uploading a keypad image needs the serial / TCP connection")
+        if not isinstance(self._last_state, int) or not JablotronState.is_service_state(self._last_state):
+            raise JablotronMenuError("the panel must be in service mode (enter it on the keypad first)")
+        records = JablotronKeypadImage.rows(pixels)
+        # the lock also keeps the background detector query (ESC) off the bus
+        async with self._bypass_lock:
+            for record in records:
+                command = JablotronCommand(name="keypad image row", code=record, raw=True)
+                await self._connection.add_command(command)
+                await command.wait_for_confirmation()
+                await asyncio.sleep(JablotronKeypadImage.ROW_INTERVAL)
 
     def load_bypass_snapshot(self, snapshot: Optional[dict]) -> None:
         """Seed bypasses from the last menu read stored in the config entry.
